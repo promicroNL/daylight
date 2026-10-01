@@ -12,5 +12,5 @@ node server.mjs
 Open [http://127.0.0.1:4173](http://127.0.0.1:4173). To run validation after importing:
 
 ```sh
-node --test test.mjs
+node --test test.mjs features.test.mjs real-export.test.mjs
 ```

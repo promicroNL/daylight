@@ -1,1 +1,1 @@
-{"name":"offline-fitbit","private":true,"type":"module","scripts":{"import":"node import.mjs ..","start":"node server.mjs","test":"node --test test.mjs"}}
+{"name":"offline-fitbit","private":true,"type":"module","scripts":{"import":"node import.mjs ..","start":"node server.mjs","test":"node --test test.mjs features.test.mjs real-export.test.mjs"}}

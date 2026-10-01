@@ -1,0 +1,9 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {csv,date,importData} from './import.mjs';
+test('CSV quoting, BOM, CRLF and embedded newlines',()=>{assert.deepEqual(csv('\uFEFFa,b\r\n"x,y","two\nlines"\r\n'),[{a:'x,y',b:'two\nlines'}]);assert.equal(date('11/08/23 23:00:09'),'2023-11-08');});
+test('Missing values, means, source precedence and malformed input',()=>{let dir=fs.mkdtempSync(path.join(os.tmpdir(),'fitbit-test-'));try{fs.writeFileSync(path.join(dir,'sleep_score.csv'),'timestamp,overall_score\n2024-01-01T00:00:00Z,70\n');fs.writeFileSync(path.join(dir,'UserSleepScores_2024.csv'),'score_time,overall_score\n2024-01-01T00:00:00Z,82\n');fs.writeFileSync(path.join(dir,'resting_heart_rate-test.json'),JSON.stringify([{dateTime:'01/01/24',value:{value:0}}]));fs.writeFileSync(path.join(dir,'heart_rate-test.json'),JSON.stringify([{dateTime:'01/01/24',value:{bpm:60}},{dateTime:'01/01/24',value:{bpm:80}}]));fs.writeFileSync(path.join(dir,'heart_rate-bad.json'),'bad');let d=importData(dir);assert.equal(d.records[0].sleep,82);assert.equal(d.records[0].heart,70);assert.equal(d.records[0].rest,undefined);assert.equal(d.samples,2);assert.equal(d.warnings.length,1);}finally{for(let f of fs.readdirSync(dir))fs.unlinkSync(path.join(dir,f));fs.rmdirSync(dir);}});
+test('Real import has sorted unique dates and valid observations',()=>{let d=JSON.parse(fs.readFileSync(new URL('./data.json',import.meta.url)));assert.ok(d.records.length>0);assert.equal(new Set(d.records.map(r=>r.date)).size,d.records.length);assert.deepEqual(d.records.map(r=>r.date),d.records.map(r=>r.date).sort());for(let r of d.records)for(let k of ['sleep','hrv','rest','heart'])if(r[k]!=null)assert.ok(Number.isFinite(r[k])&&r[k]>0);assert.equal(d.warnings.length,0);});

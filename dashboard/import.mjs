@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {metrics,metricByKey,validValue,coverage} from './metrics.js';
+import {resolveSleepOverlaps,buildSleepVariants,applySleepVariant,flagExerciseOverlaps} from './sleep-data.js';
+export {resolveSleepOverlaps} from './sleep-data.js';
 
 export function csv(text) {
   let rows=[],row=[],field='',quoted=false;
@@ -42,7 +44,7 @@ function kind(n) {
 export function importData(root) {
   const paths=[...walk(root)].sort(),days=new Map(),warnings=[],provenance={},summary={parsed:0,empty:0,unsupported:0,failed:0,duplicateObservations:0};
   const sessions=new Map(),legacySessions=new Map(),stages=new Map(),exercises=new Map(),legacyExercises=new Map();
-  let samples=0; const newerExerciseDates=new Set();
+  let samples=0; const newerExerciseDates=new Set(),sleepScores=new Map(),legacySleepScores=new Map();
   const day=d=>{if(!days.has(d))days.set(d,{date:d});return days.get(d);};
   const source=(k,name,d)=>{const map=provenance[k]??=new Map();if(!map.has(d))map.set(d,new Set());map.get(d).add(name);};
   const recognized=paths.map(p=>({p,k:kind(path.basename(p))}));
@@ -83,6 +85,8 @@ export function importData(root) {
             else {if(seen.fractional.has(sec)){summary.duplicateObservations++;continue;}seen.fractional.add(sec);}
             const a=day(d);a._heartSum=(a._heartSum||0)+v;a.count=(a.count||0)+1;samples++;source('heart',n,d);continue;
           }
+          if(k==='sleep'&&r.sleep_log_entry_id)legacySleepScores.set(String(r.sleep_log_entry_id),r);
+          if(k==='sleepNew'&&r.sleep_id){const previous=sleepScores.get(r.sleep_id);if(!previous||(r.sleep_score_last_updated||s)>=(previous.sleep_score_last_updated||previous.score_time))sleepScores.set(r.sleep_id,r);}
           if(k==='sleep'||k==='sleepNew'){observe('sleep',s,r.overall_score,k==='sleepNew'?2:1,n,'',r.sleep_score_last_updated||s);const d=date(s),v=number(r.resting_heart_rate);if(d&&v>0&&(k==='sleepNew'||day(d).sleepRest==null))day(d).sleepRest=v;}
           if(k==='hrv')observe('hrv',s,r.rmssd,1,n);
           if(k==='rest')observe('rest',s,r.value?.value,1,n);
@@ -99,8 +103,8 @@ export function importData(root) {
           if(k==='temperature') {observe('skinTemp',s,r['nightly temperature celsius'],2,n);const t=number(r['nightly temperature celsius']),b=number(r['baseline temperature celsius']);if(t>0&&b>0)observe('tempDelta',s,t-b,2,n);}
           if(k==='sessions'||k==='legacySleep') {
             const newer=k==='sessions',id=String(newer?r.sleep_id:r.logId),end=newer?r.sleep_end:r.endTime,start=newer?r.sleep_start:r.startTime,d=date(end);
-            if(!d||!id||id==='undefined')continue;
-            const record={id,date:d,start:stamp(start),end:stamp(end),minutes:validValue('awakeMinutes',newer?r.minutes_asleep:r.minutesAsleep),awake:validValue('awakeMinutes',newer?r.minutes_awake:r.minutesAwake),source:n,updated:newer?r.sleep_last_updated:''};
+            if(!d||!id||id==='undefined'||!stamp(start)||!stamp(end)||stamp(start)>=stamp(end))continue;
+            const record={id,date:d,start:stamp(start),end:stamp(end),minutes:validValue('awakeMinutes',newer?r.minutes_asleep:r.minutesAsleep),awake:validValue('awakeMinutes',newer?r.minutes_awake:r.minutesAwake),source:n,algorithm:newer?r.algorithm_version:'legacy',updated:newer?r.sleep_last_updated:''};
             if(!newer){record.deep=validValue('deep',r.levels?.summary?.deep?.minutes);record.light=validValue('light',r.levels?.summary?.light?.minutes);record.rem=validValue('rem',r.levels?.summary?.rem?.minutes);}
             const map=newer?sessions:legacySessions,previous=map.get(id);if(!previous||record.updated>=previous.updated)map.set(id,record);else summary.duplicateObservations++;
           }
@@ -131,7 +135,18 @@ export function importData(root) {
   const newerSleepDays=new Set([...sessions.values()].map(s=>s.date));
   for(const [id,s]of legacySessions)if(!sessions.has(id)&&!newerSleepDays.has(s.date))sessions.set(id,s);
   for(const s of stages.values()){const session=sessions.get(s.sleepId);if(session){session[s.type]=(session[s.type]||0)+s.minutes;source(s.type,s.source,session.date);}}
-  for(const s of sessions.values()) {
+  for(const session of sessions.values()){day(session.date);const score=sleepScores.get(session.id)||legacySleepScores.get(session.id);session.score=validValue('sleep',score?.overall_score);const rest=number(score?.resting_heart_rate);if(rest>0)session.sleepRest=rest;}
+  const sleepVariants=buildSleepVariants([...sessions.values()]);
+  const defaultSleepVersion=['v1','v2','unversioned'].find(v=>sleepVariants[v].sessions.length)||'v1';
+  const resolved=resolveSleepOverlaps(sessions.values());
+  const scoredDays=new Set();
+  // Select the widest retained scored session as the day's score (normally the main sleep).
+  for(const session of [...resolved.kept].sort((a,b)=>(Date.parse(b.end)-Date.parse(b.start))-(Date.parse(a.end)-Date.parse(a.start)))){
+    const score=sleepScores.get(session.id),value=validValue('sleep',score?.overall_score);
+    if(value!==null&&!scoredDays.has(session.date)){day(session.date).sleep=value;scoredDays.add(session.date);const rest=number(score.resting_heart_rate);if(rest>0)day(session.date).sleepRest=rest;}
+  }
+  summary.overlappingSleepSessions=resolved.excluded.length;
+  for(const s of resolved.kept) {
     const r=day(s.date);
     for(const [key,v]of [['sleepHours',s.minutes===null?null:s.minutes/60],['awakeMinutes',s.awake],['deep',s.deep],['light',s.light],['rem',s.rem]])if(v!=null){r[key]=(r[key]||0)+v;source(key,s.source,s.date);}
     delete s.updated;
@@ -142,7 +157,12 @@ export function importData(root) {
   const records=[...days.values()].sort((a,b)=>a.date.localeCompare(b.date));
   for(const r of records){if(r.count)r.heart=r._heartSum/r.count;delete r._heartSum;}
   const stats=coverage(records);for(const m of metrics)stats[m.key].sources=[...new Set([...(provenance[m.key]?.values()||[])].flatMap(s=>[...s]))].sort();
-  return {schemaVersion:2,generated:new Date().toISOString(),files:summary.parsed,samples,warnings,summary,metrics:stats,records,sleepSessions:[...sessions.values()].sort((a,b)=>a.start.localeCompare(b.start)),exercises:[...exercises.values()].sort((a,b)=>a.start.localeCompare(b.start))};
+  const result={schemaVersion:3,sleepVariants,defaultSleepVersion,generated:new Date().toISOString(),files:summary.parsed,samples,warnings,summary,metrics:stats,records,sleepSessions:resolved.kept,excludedSleepSessions:resolved.excluded,exercises:flagExerciseOverlaps([...exercises.values()])};
+  const output=applySleepVariant(result,defaultSleepVersion);
+  // Keep score-only exports usable when no sleep sessions are supplied.
+  if(!sessions.size){delete result.sleepVariants;delete result.defaultSleepVersion;return result;}
+  const finalCoverage=coverage(output.records);for(const m of metrics)output.metrics[m.key]={...output.metrics[m.key],...finalCoverage[m.key]};
+  return output;
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
   console.log('Reading supported health files locally…');

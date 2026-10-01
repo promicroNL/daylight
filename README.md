@@ -121,13 +121,25 @@ An import with no supported observations preserves the previous dataset. If some
 
 Formats vary between exports. Unsupported filenames or schemas are not automatically converted. Missing metrics are shown as unavailable rather than estimated.
 
+### Sleep version selection
+
+Choose **v1**, **v2**, or **Hybrid** above the Overview or Sleep tab. The choice is saved in this browser. v1 is the default when available because it provides a consistent long-term series in the supplied export; v2 is selected by default only for exports without v1. Unversioned/legacy records can also be viewed separately.
+
+- **v1 / v2:** only that version contributes to sleep duration, awake time, stages, and scores. Missing dates remain gaps.
+- **Hybrid:** prefers v2, then v1, then unversioned records for overlapping sleep episodes. Non-overlapping naps remain included. A partial v2 record can replace a longer v1 night; the importer does not splice estimates together to fill it.
+- **Compare v1 and v2:** shows separate duration bars, a mean duration difference for matched days only, and a table of duration, score and stage differences. The comparison always uses the same selected date range, regardless of the primary version choice.
+
+Within one version, overlapping records retain the widest interval, with latest update breaking ties. The source documentation does not define the algorithms’ internal changes: v2 is not assumed to be medically more accurate. Changing methods can change a trend even when underlying sleep has not changed.
+
+Possible duplicate workouts are flagged when the same activity type overlaps more than 80% of the shorter record. Both remain in the exercise table; this does not alter separately imported daily activity totals. Readiness component fields are not interpreted; some exported fields are constant or unspecified.
+
 ### How values are interpreted
 
 - **Missing readings:** missing, non-finite, and source-specific invalid readings are excluded, including legacy zero placeholders for resting heart rate and failed stress calculations. Valid activity zeros and negative temperature deviations are preserved. Gaps are not interpolated.
 - **Heart rate:** daily averages weight recorded samples equally, not time equally. Sampling density affects the result. Period summaries then weight available daily averages equally.
 - **Resting heart rate:** only the dedicated daily source is charted. The resting-rate field attached to sleep scores is retained separately as `sleepRest` in generated data, but is not substituted into the chart.
-- **Sleep scores:** newer Google `UserSleepScores` records take precedence over legacy records on the same date. Within a date, the latest update/timestamp wins in the preferred source. The dashboard shows one score per date, not individual sleep sessions.
-- **Sleep sessions:** durations and stage minutes sum distinct sessions ending on the same date, including naps. Stage information is joined by sleep ID. Missing stage types are left absent, not set to zero.
+- **Sleep scores:** newer Google `UserSleepScores` records take precedence over legacy records on the same date. When sessions are available, the score follows the widest retained scored session of the selected version. Score-only exports retain the latest update/timestamp in the preferred source. The dashboard shows one score per date.
+- **Sleep sessions:** durations and stage minutes sum non-overlapping sessions ending on the same date, including naps. Some exports contain both v1 and v2 estimates of the same night with different IDs. Within the selected version, overlapping records retain the widest recorded time interval, then the latest update for equal durations. Hybrid first prioritizes the algorithm version. This is an explicit coverage heuristic, not a claim that one algorithm is medically more accurate. Excluded records can be inspected in the Sleep tab. Scores use the widest retained scored session when available. Stage information is joined by sleep ID. Missing stage types are left absent, not set to zero.
 - **Activity:** total calories and active calories are separate measures, not additive. Active zone minutes retain the exported intensity weighting. A reported zero is not treated as a missing day. Calories can exist on days without recorded steps.
 - **Body:** weight uses the final recorded value per day. Skin temperature is not core body temperature; deviation is calculated only when both the nightly temperature and exported baseline exist. No baseline is invented.
 - **Legacy formats:** legacy distance and weight streams are not imported because units are not explicit in those records. Legacy exercise distance is used only when a supported explicit distance unit is present. ECG, glucose, menstrual records, account/security, commerce and social records are outside this version’s scope.
@@ -146,7 +158,7 @@ Original export files are read only. There is no telemetry, CDN dependency, exte
 
 ### Dataset compatibility
 
-Existing four-metric `data.json` files remain readable. Reimport to generate schema version 2 with additional measurements, session summaries, and per-metric coverage/source filenames. The dashboard does not require an automatic migration. Selecting charts changes only browser preferences, not the imported dataset.
+Existing four-metric `data.json` files remain readable. Reimport to generate schema version 3 with additional measurements, session summaries, per-metric coverage/source filenames, and independent sleep-version datasets. The dashboard does not require an automatic migration. Selecting charts changes only browser preferences, not the imported dataset.
 
 ## Troubleshooting
 
